@@ -1,0 +1,35 @@
+# Environment Variables & Sensitive Credentials
+.env
+*.env
+.env.local
+.env.*.local
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Bot Logs & Temporary Artifacts
+*.log
+logs/
+.kilo/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Deployment Zips / Archives (Opsional, agar repo bersih)
+*.zip
+*.tar.gz
