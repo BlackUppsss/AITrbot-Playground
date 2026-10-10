@@ -22,18 +22,37 @@ class PriceTriggerWatch:
     trade_id: Optional[str] = None
     triggered: bool = False
 
+@dataclass
+class PositionStreamWatch:
+    symbol: str
+    market_id: int
+    market_type: str
+    trade_id: str
+    sl_price: float
+    tp1_price: float
+    tp2_price: float
+    action: str
+    created_at: float
+
 class LighterWebSocketTriggerManager:
     """
-    On-Demand Real-Time WebSocket Trigger Engine for Lighter DEX.
-    Monitors live order books ONLY when the AI Committee requests a price watch condition.
-    Automatically shuts down the WebSocket connection when no watches remain active.
+    On-Demand Real-Time WebSocket Trigger & Mark Price Engine for Lighter DEX.
+    - Streams live `market_stats/{market_id}` (Mark Price) for active open positions to detect SL/TP hits immediately.
+    - Streams live `order_book/{market_id}` and `market_stats/{market_id}` for unlimited AI confirmation watches.
+    - Automatically shuts down the WebSocket connection when no active watches or open positions remain.
     """
     WS_URL = "wss://mainnet.zklighter.elliot.ai/stream"
 
-    def __init__(self, on_trigger_callback: Optional[Callable[[PriceTriggerWatch, float], Awaitable[None]]] = None):
+    def __init__(
+        self,
+        on_trigger_callback: Optional[Callable[[PriceTriggerWatch, float], Awaitable[None]]] = None,
+        on_mark_price_callback: Optional[Callable[[str, int, float], Awaitable[None]]] = None
+    ):
         self.watches: Dict[int, List[PriceTriggerWatch]] = {}
+        self.position_streams: Dict[int, PositionStreamWatch] = {}
         self.symbol_to_market_id: Dict[str, int] = {}
         self.on_trigger_callback = on_trigger_callback
+        self.on_mark_price_callback = on_mark_price_callback
         self.subscribed_market_ids = set()
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.session: Optional[aiohttp.ClientSession] = None
@@ -100,11 +119,15 @@ class LighterWebSocketTriggerManager:
         if market_id not in self.watches:
             self.watches[market_id] = []
         
-        self.watches[market_id] = [w for w in self.watches[market_id] if w.symbol != symbol]
+        # Allow unlimited confirmation watches (replace only identical condition/reason or keep all active watches)
+        self.watches[market_id] = [
+            w for w in self.watches[market_id]
+            if not (w.symbol == symbol and w.condition == watch.condition and abs(w.trigger_price - trigger_price) < 1e-8)
+        ]
         self.watches[market_id].append(watch)
         self.symbol_to_market_id[symbol] = market_id
 
-        print(f"[WS Trigger Manager] 🎯 Armed 1-shot watch for {symbol} | Condition: {condition.upper()} ${trigger_price:,.4f} | Reason: {reason}")
+        print(f"[WS Trigger Manager] 🎯 Armed confirmation watch for {symbol} | Condition: {condition.upper()} ${trigger_price:,.4f} | Reason: {reason}")
 
         # Start WebSocket engine on-demand if it is idle
         if not self._running:
@@ -112,6 +135,8 @@ class LighterWebSocketTriggerManager:
             asyncio.create_task(self.start())
         elif self.ws and not self.ws.closed and market_id not in self.subscribed_market_ids:
             asyncio.create_task(self._send_subscribe(market_id))
+
+        return watch
 
     def add_position_watch(
         self,
@@ -125,40 +150,44 @@ class LighterWebSocketTriggerManager:
         action: str
     ):
         """
-        Arm real-time WebSocket monitoring for an active trade position.
-        Instantly streams orderbook ticks to monitor SL, TP1, and TP2 triggers.
+        Arm continuous real-time Mark Price WebSocket monitoring for an active trade position.
+        Immediately subscribes to `market_stats/{market_id}` on Lighter DEX to monitor Mark Price
+        against SL, BE (+1R), TP1 (+2R), Trailing SL, and TP2 (+4R).
         """
-        is_long = "LONG" in action
-        # Arm SL trigger watch
-        self.add_watch(
+        self.symbol_to_market_id[symbol] = market_id
+        self.position_streams[market_id] = PositionStreamWatch(
             symbol=symbol,
             market_id=market_id,
             market_type=market_type,
-            trigger_price=sl_price,
-            condition="BELOW" if is_long else "ABOVE",
-            reason="Active Position SL Watch",
-            initial_decision={},
-            initial_ta={},
-            initial_news={},
-            duration_seconds=86400 * 7, # Active until position closes
-            trade_id=trade_id
+            trade_id=trade_id,
+            sl_price=sl_price,
+            tp1_price=tp1_price,
+            tp2_price=tp2_price,
+            action=action,
+            created_at=time.time()
         )
-        # Arm TP1 trigger watch
-        self.add_watch(
-            symbol=symbol,
-            market_id=market_id,
-            market_type=market_type,
-            trigger_price=tp1_price,
-            condition="ABOVE" if is_long else "BELOW",
-            reason="Active Position TP1 Watch",
-            initial_decision={},
-            initial_ta={},
-            initial_news={},
-            duration_seconds=86400 * 7,
-            trade_id=trade_id
+        print(
+            f"[WS Mark Price Watcher] 📡 Subscribed active position {symbol} [{action}] (Market ID: {market_id}) "
+            f"| Monitoring Mark Price for SL: ${sl_price:,.4f} | TP1: ${tp1_price:,.4f} | TP2: ${tp2_price:,.4f}"
         )
+
+        if not self._running:
+            print(f"[WS Trigger Manager] 🔌 Active position opened for {symbol}. Starting WebSocket engine on-demand...")
+            asyncio.create_task(self.start())
+        elif self.ws and not self.ws.closed and market_id not in self.subscribed_market_ids:
+            asyncio.create_task(self._send_subscribe(market_id))
+
+    def remove_position_watch(self, symbol: str):
+        """Remove active position Mark Price stream once the position is closed."""
         market_id = self.symbol_to_market_id.get(symbol)
-        if market_id and market_id in self.watches:
+        if market_id is not None and market_id in self.position_streams:
+            del self.position_streams[market_id]
+            print(f"[WS Mark Price Watcher] 🔕 Unsubscribed closed position for {symbol} (Market ID: {market_id}).")
+        self._check_auto_stop()
+
+    def remove_watch(self, symbol: str):
+        market_id = self.symbol_to_market_id.get(symbol)
+        if market_id is not None and market_id in self.watches:
             self.watches[market_id] = [w for w in self.watches[market_id] if w.symbol != symbol]
             if not self.watches[market_id]:
                 del self.watches[market_id]
@@ -166,28 +195,37 @@ class LighterWebSocketTriggerManager:
 
     def has_active_watch(self, symbol: str) -> bool:
         market_id = self.symbol_to_market_id.get(symbol)
-        if not market_id or market_id not in self.watches:
+        if market_id is None:
+            return False
+        if market_id in self.position_streams:
+            return True
+        if market_id not in self.watches:
             return False
         now = time.time()
         return any(not w.triggered and w.expires_at > now for w in self.watches[market_id] if w.symbol == symbol)
 
     def _check_auto_stop(self):
-        """Stop WebSocket connection automatically when 0 active watches remain."""
+        """Stop WebSocket connection automatically when 0 active watches and 0 open position streams remain."""
         now = time.time()
-        has_active = any(
+        has_active_triggers = any(
             any(not w.triggered and w.expires_at > now for w in wlist)
             for wlist in self.watches.values()
         )
-        if not has_active and self._running:
-            print("[WS Trigger Manager] 💤 No active watches remaining. Auto-stopping WebSocket...")
+        has_active_positions = len(self.position_streams) > 0
+        if not has_active_triggers and not has_active_positions and self._running:
+            print("[WS Trigger Manager] 💤 No active watches or open positions remaining. Auto-stopping WebSocket...")
             asyncio.create_task(self.stop())
 
     async def _send_subscribe(self, market_id: int):
         if not self.ws or self.ws.closed:
             return
         try:
-            msg = {"type": "subscribe", "channel": f"order_book/{market_id}"}
-            await self.ws.send_str(json.dumps(msg))
+            # Subscribe to market_stats/{market_id} for official Lighter DEX Mark Price
+            stats_msg = {"type": "subscribe", "channel": f"market_stats/{market_id}"}
+            await self.ws.send_str(json.dumps(stats_msg))
+            # Also subscribe to order_book/{market_id} for high-frequency tick fallback
+            ob_msg = {"type": "subscribe", "channel": f"order_book/{market_id}"}
+            await self.ws.send_str(json.dumps(ob_msg))
             self.subscribed_market_ids.add(market_id)
         except Exception as e:
             print(f"[WS Trigger Manager Error] Failed to subscribe to market {market_id}: {e}")
@@ -204,9 +242,8 @@ class LighterWebSocketTriggerManager:
                     backoff = 1.0
                     print("[WS Trigger Manager] Connected to Lighter Stream WebSocket.")
 
-                    for market_id, watch_list in list(self.watches.items()):
-                        if watch_list:
-                            await self._send_subscribe(market_id)
+                    for market_id in list(self.watches.keys()) + list(self.position_streams.keys()):
+                        await self._send_subscribe(market_id)
 
                     async for msg in ws:
                         if not self._running:
@@ -238,6 +275,30 @@ class LighterWebSocketTriggerManager:
                     await self.ws.send_str(json.dumps({"type": "pong"}))
                 return
 
+            if channel.startswith("market_stats:"):
+                market_id_str = channel.split(":")[1]
+                try:
+                    market_id = int(market_id_str)
+                except ValueError:
+                    return
+
+                stats = data.get("market_stats", {})
+                mark_price_str = stats.get("mark_price") or stats.get("mid_price")
+                if not mark_price_str:
+                    return
+                mark_price = float(mark_price_str)
+                symbol = stats.get("symbol", f"MARKET-{market_id}")
+
+                # If this market has an active position stream, pass live mark_price directly!
+                if market_id in self.position_streams and self.on_mark_price_callback:
+                    pos_watch = self.position_streams[market_id]
+                    asyncio.create_task(self.on_mark_price_callback(pos_watch.symbol, market_id, mark_price))
+
+                # Also evaluate any conditional price trigger watches using live mark_price
+                if market_id in self.watches and self.watches[market_id]:
+                    await self._eval_watches_for_price(market_id, mark_price)
+                return
+
             if channel.startswith("order_book:"):
                 market_id_str = channel.split(":")[1]
                 try:
@@ -262,34 +323,39 @@ class LighterWebSocketTriggerManager:
                 if best_bid is not None and best_ask is not None:
                     current_price = (best_bid + best_ask) / 2.0
 
-                now = time.time()
-                active_watches = self.watches[market_id][:]
-                for watch in active_watches:
-                    if watch.triggered:
-                        continue
-                    if watch.expires_at < now:
-                        self.watches[market_id].remove(watch)
-                        print(f"[WS Trigger Manager] ⏱️ Watch expired for {watch.symbol}")
-                        continue
-
-                    # Check Trigger Condition
-                    is_triggered = False
-                    if watch.condition == "ABOVE" and current_price >= watch.trigger_price:
-                        is_triggered = True
-                    elif watch.condition == "BELOW" and current_price <= watch.trigger_price:
-                        is_triggered = True
-
-                    if is_triggered:
-                        watch.triggered = True
-                        self.watches[market_id].remove(watch)
-                        print(f"\n[WS Trigger Manager] 🚨 TRIGGER HIT! {watch.symbol} crossed {watch.condition} ${watch.trigger_price:,.4f} (Current: ${current_price:,.4f})")
-                        if self.on_trigger_callback:
-                            asyncio.create_task(self.on_trigger_callback(watch, current_price))
-
-                if not self.watches.get(market_id):
-                    self.watches.pop(market_id, None)
-
-                self._check_auto_stop()
+                await self._eval_watches_for_price(market_id, current_price)
 
         except Exception as e:
             pass
+
+    async def _eval_watches_for_price(self, market_id: int, current_price: float):
+        if market_id not in self.watches or not self.watches[market_id]:
+            return
+        now = time.time()
+        active_watches = self.watches[market_id][:]
+        for watch in active_watches:
+            if watch.triggered:
+                continue
+            if watch.expires_at < now:
+                self.watches[market_id].remove(watch)
+                print(f"[WS Trigger Manager] ⏱️ Watch expired for {watch.symbol}")
+                continue
+
+            # Check Trigger Condition
+            is_triggered = False
+            if watch.condition == "ABOVE" and current_price >= watch.trigger_price:
+                is_triggered = True
+            elif watch.condition == "BELOW" and current_price <= watch.trigger_price:
+                is_triggered = True
+
+            if is_triggered:
+                watch.triggered = True
+                self.watches[market_id].remove(watch)
+                print(f"\n[WS Trigger Manager] 🚨 TRIGGER HIT! {watch.symbol} crossed {watch.condition} ${watch.trigger_price:,.4f} (Current Mark: ${current_price:,.4f})")
+                if self.on_trigger_callback:
+                    asyncio.create_task(self.on_trigger_callback(watch, current_price))
+
+        if not self.watches.get(market_id):
+            self.watches.pop(market_id, None)
+
+        self._check_auto_stop()

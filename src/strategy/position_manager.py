@@ -17,10 +17,17 @@ class PositionManager:
     - Automatically conducts AI Post-Mortem Analysis on EVERY closed trade (Win/Loss Root Cause).
     """
 
-    def __init__(self, notifier: DiscordNotifier, debate_desk: Optional[MultiAgentTradingDesk] = None):
+    def __init__(
+        self,
+        notifier: DiscordNotifier,
+        debate_desk: Optional[MultiAgentTradingDesk] = None,
+        on_position_closed_callback: Optional[ Any ] = None
+    ):
         self.notifier = notifier
         self.debate_desk = debate_desk or MultiAgentTradingDesk()
+        self.on_position_closed_callback = on_position_closed_callback
         self.active_positions: Dict[str, Dict[str, Any]] = {} # symbol -> position detail
+        self._closing_symbols = set() # Prevent concurrent duplicate close triggers on high-frequency WS ticks
 
     def add_position(self, signal: Dict[str, Any], initial_ta: Optional[Dict[str, Any]] = None, initial_news: Optional[Dict[str, Any]] = None) -> str:
         symbol = signal.get("symbol")
@@ -64,19 +71,16 @@ class PositionManager:
         return pos["trade_id"] if pos else None
 
     def can_retrigger(self, symbol: str) -> bool:
-        """Ensure a trade can only be retriggered by WebSocket ONCE."""
-        pos = self.active_positions.get(symbol)
-        if not pos:
-            return True
-        return not pos.get("has_retriggered", False)
+        """Allow unlimited WebSocket confirmation re-triggers."""
+        return True
 
     def mark_retriggered(self, symbol: str):
-        """Mark that this trade has executed its 1-shot re-trigger."""
+        """Record re-trigger count for telemetry without limiting re-triggers."""
         if symbol in self.active_positions:
             self.active_positions[symbol]["has_retriggered"] = True
 
     async def update_position_price(self, symbol: str, current_price: float, ta: Dict[str, Any]):
-        if symbol not in self.active_positions:
+        if symbol not in self.active_positions or symbol in self._closing_symbols:
             return
 
         pos = self.active_positions[symbol]
@@ -89,7 +93,7 @@ class PositionManager:
 
         is_long = "LONG" in action
 
-        # Calculate floating PnL % and Realized R-Multiple
+        # Calculate floating PnL % and Realized R-Multiple based on Mark Price
         risk_dist = pos.get("initial_risk_dist", entry * 0.01)
         if is_long:
             pnl_pct = ((current_price - entry) / entry) * 100
@@ -101,49 +105,62 @@ class PositionManager:
         # R-Multiple Calculation: (Price Change / Initial Risk Distance)
         realized_r = round(price_diff / risk_dist, 2) if risk_dist > 0 else 0.0
 
-        # 1. Check Stop Loss Hit (Hard Capped at -1.0R maximum loss)
+        # 1. Check Stop Loss Hit via Lighter DEX Mark Price (Hard Capped at -1.0R maximum loss)
         if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
-            outcome = "BREAK_EVEN" if pos["tp1_reached"] else "LOSS"
-            # Strict 1R Risk Cap: realized loss is capped at -1.0R
-            if outcome == "LOSS":
-                realized_r = max(-1.0, realized_r)
-            print(f"[PositionManager] {symbol} hit Exit at ${current_price:,.4f} ({outcome} | {realized_r:+.2f}R)")
-            
-            event_data = {
-                "symbol": symbol,
-                "event_type": "STOPPED_OUT" if outcome == "LOSS" else "BE_EXIT",
-                "action": action,
-                "current_price": current_price,
-                "new_sl": sl,
-                "pnl_pct": pnl_pct,
-                "realized_r": realized_r,
-                "message": f"Position closed at {sl:,.4f} ({outcome} | {realized_r:+.2f}R)."
-            }
-            BotLogger.log_trade_event(event_data)
-            self.notifier.send_trade_update(event_data)
-
-            # 🧠 RUN AI POST-MORTEM ROOT CAUSE EVALUATION
+            self._closing_symbols.add(symbol)
             try:
-                news_context = NewsFetcher.get_news_context(symbol)
-                post_mortem = await self.debate_desk.evaluate_post_mortem(
-                    symbol=symbol,
-                    action=action,
-                    entry_price=entry,
-                    exit_price=current_price,
-                    outcome=outcome,
-                    pnl_pct=pnl_pct,
-                    realized_r=realized_r,
-                    initial_state=pos,
-                    technical_data=ta,
-                    news_data=news_context
-                )
-                if post_mortem:
-                    BotLogger.log_trade_event({"post_mortem": post_mortem})
-                    self.notifier.send_post_mortem(post_mortem)
-            except Exception as e:
-                print(f"[PositionManager Error] Post-mortem failed: {e}")
+                is_be_sl = pos["tp1_reached"] or (pos["current_sl"] != pos["original_sl"])
+                outcome = "BREAK_EVEN" if is_be_sl and abs(current_price - entry) <= (risk_dist * 0.25) else ("WIN" if realized_r > 0.2 else "LOSS")
+                if not is_be_sl:
+                    outcome = "LOSS"
+                # Strict 1R Risk Cap: realized loss is capped at -1.0R
+                if outcome == "LOSS":
+                    realized_r = -1.0
+                print(f"[PositionManager] 🛑 {symbol} Mark Price (${current_price:,.4f}) touched SL (${sl:,.4f}) -> {outcome} ({realized_r:+.2f}R)")
+                
+                event_data = {
+                    "symbol": symbol,
+                    "event_type": "STOPPED_OUT" if outcome == "LOSS" else "BE_EXIT",
+                    "action": action,
+                    "current_price": current_price,
+                    "new_sl": sl,
+                    "pnl_pct": pnl_pct,
+                    "realized_r": realized_r,
+                    "message": (
+                        f"Lighter DEX Mark Price (${current_price:,.4f}) touched Stop Loss at ${sl:,.4f} ({outcome} | {realized_r:+.2f}R). "
+                        f"AI Post-Mortem Audit initiated to analyze why Mark Price hit SL."
+                    )
+                }
+                BotLogger.log_trade_event(event_data)
+                self.notifier.send_trade_update(event_data)
 
-            del self.active_positions[symbol]
+                # 🧠 RUN AI POST-MORTEM ROOT CAUSE EVALUATION (Auditing why Lighter Mark Price hit SL)
+                try:
+                    news_context = NewsFetcher.get_news_context(symbol)
+                    post_mortem = await self.debate_desk.evaluate_post_mortem(
+                        symbol=symbol,
+                        action=action,
+                        entry_price=entry,
+                        exit_price=current_price,
+                        outcome=outcome,
+                        pnl_pct=pnl_pct,
+                        realized_r=realized_r,
+                        initial_state=pos,
+                        technical_data=ta,
+                        news_data=news_context
+                    )
+                    if post_mortem:
+                        BotLogger.log_trade_event({"post_mortem": post_mortem})
+                        self.notifier.send_post_mortem(post_mortem)
+                except Exception as e:
+                    print(f"[PositionManager Error] Post-mortem failed: {e}")
+
+                if symbol in self.active_positions:
+                    del self.active_positions[symbol]
+                if self.on_position_closed_callback:
+                    self.on_position_closed_callback(symbol)
+            finally:
+                self._closing_symbols.discard(symbol)
             return
 
         # 1.5. Dynamic SL+ adjustment when in profit (+1.0R reached)
@@ -200,6 +217,8 @@ class PositionManager:
                     BotLogger.log_trade_event(event_data)
                     self.notifier.send_trade_update(event_data)
                     del self.active_positions[symbol]
+                    if self.on_position_closed_callback:
+                        self.on_position_closed_callback(symbol)
                     return
                 else:
                     # Move to SL+ (+1.0R secured profit lock)
@@ -259,6 +278,8 @@ class PositionManager:
                     print(f"[PositionManager Error] Win post-mortem failed: {e}")
 
                 del self.active_positions[symbol]
+                if self.on_position_closed_callback:
+                    self.on_position_closed_callback(symbol)
                 return
 
             # Dynamic Trailing SL Calculation

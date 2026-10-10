@@ -35,19 +35,22 @@ class Settings:
 
     # Pair Filtering Settings
     # Elite High-Predictability Universe:
-    # 1. Crypto: BTC (King of liquidity, respect technicals)
-    # 2. Forex Majors: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD (High macro predictability, low noise)
-    # 3. Macro Indices & Metals: SPY (S&P 500), QQQ (Nasdaq 100), XAU (Gold) (Cleanest trend continuation)
-    # 4. Mega-Cap Tech Stocks ("Magnificent 7"): NVDA, AAPL, MSFT, AMZN, GOOGL, META, TSLA (Institutional volume & clean support/resistance)
+    # 1. Crypto: BTC, ETH (Top liquidity, 24/7 trading, respect technicals)
+    # 2. Forex Majors: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD (High macro predictability, disabled on Saturday & Sunday)
+    # 3. Macro Indices & Metals: SPY (S&P 500), US500 (US 500 Perp), QQQ (Nasdaq 100), XAU (Gold) (Cleanest trend continuation)
+    # 4. Mega-Cap Tech Stocks: NVDA, AAPL, MSFT, META, TSLA (Institutional volume & clean support/resistance; AMZN & GOOGL removed)
+    FOREX_SYMBOLS: list = [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"
+    ]
     HIGH_PREDICTABILITY_SYMBOLS: list = [
-        # Crypto (1 pair)
-        "BTC",
-        # Forex Majors (5 pairs)
+        # Crypto (2 pairs)
+        "BTC", "ETH",
+        # Forex Majors (5 pairs - disabled on weekends)
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-        # Index & Gold (3 pairs)
-        "SPY", "QQQ", "XAU",
-        # Mega-Cap Blue-Chip Stocks (7 pairs)
-        "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA"
+        # Index & Gold (4 pairs)
+        "SPY", "US500", "QQQ", "XAU",
+        # Mega-Cap Blue-Chip Stocks (5 pairs)
+        "NVDA", "AAPL", "MSFT", "META", "TSLA"
     ]
     ALLOWED_SYMBOLS: list = HIGH_PREDICTABILITY_SYMBOLS
 

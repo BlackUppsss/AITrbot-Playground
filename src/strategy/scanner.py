@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import time
 from typing import List, Dict, Any, Optional
 from src.lighter.client import LighterClient
@@ -19,46 +20,77 @@ class MarketScanner:
     - Tier 1: Quantitative Pre-Filter (0 Token Cost)
     - Tier 2: News & Macro Context Fetcher
     - Tier 3: Multi-Agent Debate Engine (Gemini 3.8 Flash High)
-    - Tier 4: Discord Webhook Broadcast & Dynamic Position Tracking (Move SL to BE & Trailing SL)
+    - Tier 4: Discord Webhook Broadcast & Dynamic Position Tracking (Move SL to BE & Trailing SL via Mark Price)
     """
 
     def __init__(self):
         self.lighter_client = LighterClient()
         self.debate_desk = MultiAgentTradingDesk()
         self.notifier = DiscordNotifier()
-        self.position_manager = PositionManager(self.notifier)
-        self.ws_trigger_manager = LighterWebSocketTriggerManager(on_trigger_callback=self.handle_price_trigger)
+        self.ws_trigger_manager = LighterWebSocketTriggerManager(
+            on_trigger_callback=self.handle_price_trigger,
+            on_mark_price_callback=self.handle_mark_price_tick
+        )
+        self.position_manager = PositionManager(
+            self.notifier,
+            debate_desk=self.debate_desk,
+            on_position_closed_callback=self.ws_trigger_manager.remove_position_watch
+        )
         self.cooldowns: Dict[str, float] = {} # Cooldown to avoid spamming the same pair within 30 minutes
         self.ai_call_lock = asyncio.Lock()
         self.last_global_ai_call_time = 0.0
         self.ai_call_timestamps: list = []  # Tracks request timestamps in the last 60 seconds (for strict 30 RPM)
 
+    @staticmethod
+    def is_weekend_forex_blocked(symbol: str) -> bool:
+        """
+        Block trading on currency / Forex pairs on Saturday (5) and Sunday (6) UTC.
+        """
+        sym_upper = symbol.upper().split("/")[0].split("-")[0]
+        forex_set = set(s.upper() for s in getattr(settings, "FOREX_SYMBOLS", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]))
+        if sym_upper in forex_set:
+            weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
+            if weekday in (5, 6):
+                return True
+        return False
+
+    async def handle_mark_price_tick(self, symbol: str, market_id: int, mark_price: float):
+        """
+        Real-time callback invoked whenever Lighter DEX WebSocket broadcasts a `market_stats/{market_id}`
+        Mark Price update for an open trade position.
+        Immediately checks if Mark Price touched SL, +1R BE, TP1, Trailing SL, or TP2.
+        """
+        if symbol not in self.position_manager.active_positions:
+            return
+        pos = self.position_manager.active_positions.get(symbol)
+        if not pos:
+            return
+        ta_tick = pos.get("initial_ta", {}).copy()
+        ta_tick["current_price"] = mark_price
+        await self.position_manager.update_position_price(symbol, mark_price, ta_tick)
+
     async def handle_price_trigger(self, watch: PriceTriggerWatch, current_price: float):
         """
-        One-shot callback invoked when a market hits the AI Committee's watched price level or active trade TP/SL.
-        Runs as an isolated concurrent task per trade/symbol.
+        Callback invoked when a market hits the AI Committee's watched price confirmation level.
+        Supports unlimited confirmation re-triggers.
         """
         trade_label = f"[{watch.trade_id}] " if watch.trade_id else ""
         
-        # 🎯 Check if this is an Active Trade SL/TP/Trailing check!
         if watch.symbol in self.position_manager.active_positions:
-            print(f"\n[⚡ LIVE WS TRADE TICK] Real-time orderbook hit watch for {trade_label}{watch.symbol} at ${current_price:,.4f} ({watch.reason})")
-            # Immediately update position tracking with live tick data
             pos = self.position_manager.active_positions.get(watch.symbol)
             if pos:
-                # Prepare synthetic TA with current tick price for instant sub-second trigger handling
                 ta_tick = pos.get("initial_ta", {}).copy()
                 ta_tick["current_price"] = current_price
                 await self.position_manager.update_position_price(watch.symbol, current_price, ta_tick)
                 return
 
-        print(f"\n[⚡ RE-TRIGGER EVALUATION] Firing 1-shot AI Committee debate for {trade_label}{watch.symbol} (Market ID: {watch.market_id}) at ${current_price:,.4f}...")
+        print(f"\n[⚡ RE-TRIGGER EVALUATION] Firing AI Committee confirmation debate for {trade_label}{watch.symbol} (Market ID: {watch.market_id}) at Mark Price ${current_price:,.4f}...")
         market = {
             "market_id": watch.market_id,
             "symbol": watch.symbol,
             "market_type": watch.market_type
         }
-        # Temporarily clear cooldown for this triggered pair to allow instant re-debate
+        # Clear cooldown for this triggered pair to allow instant re-debate
         if watch.symbol in self.cooldowns:
             del self.cooldowns[watch.symbol]
         
@@ -70,6 +102,10 @@ class MarketScanner:
         market_id = market["market_id"]
         symbol = market["symbol"]
         market_type = market["market_type"]
+
+        # Block Forex / Currency pairs on Saturday & Sunday
+        if self.is_weekend_forex_blocked(symbol):
+            return None
 
         # Check cooldown (30 mins per pair unless it's a 1-shot price trigger re-eval)
         now = time.time()
@@ -251,7 +287,7 @@ class MarketScanner:
                 )
                 return decision
 
-            elif action == "WATCH_CONFIRMATION" and not is_retrigger:
+            elif action == "WATCH_CONFIRMATION":
                 trigger_price = decision.get("target_trigger_price")
                 condition = decision.get("condition_type", "ABOVE")
                 expiry = decision.get("expiry_seconds", 3600)
