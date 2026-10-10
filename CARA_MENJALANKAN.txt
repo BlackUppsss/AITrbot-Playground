@@ -1,70 +1,108 @@
-# ====================================================================
-# PANDUAN MENJALANKAN AI DAILY TRADE BOT (LIGHTER DEX)
-# ====================================================================
+====================================================================
+COMMAND MENYIAPKAN PYTHON & MENJALANKAN BOT DARI AWAL DI PM2
+====================================================================
 
-# --------------------------------------------------------------------
-# 1. CARA MENJALANKAN BOT (LOKAL / VPS / SERVER)
-# --------------------------------------------------------------------
+File ini dibuat agar bisa langsung di-copy paste step-by-step
+dari setup Python environment sampai bot running 24/7 di PM2.
 
-# Masuk ke direktori folder bot:
-cd "c:\Randy's\Bot\AI Daily Trade Bot"
 
-# Pastikan dependencies sudah terinstal (cukup sekali):
+====================================================================
+OPSI A: UNTUK SERVER LINUX / VPS (UBUNTU / DEBIAN)
+====================================================================
+
+# STEP 1: Masuk ke folder bot
+cd ~/AITrbot-Playground
+# (atau arahkan ke folder tempat bot diekstrak)
+
+# STEP 2: Siapkan Virtual Environment Python
+python3 -m venv venv
+
+# STEP 3: Aktifkan Virtual Environment
+source venv/bin/activate
+
+# STEP 4: Upgrade pip & Install seluruh dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 
-# Jalankan Bot Utama:
-python main.py
+# STEP 5: Pastikan file .env sudah ada (isi API KEY & Webhook)
+# Jika belum ada:
+# cp .env.example .env
+# nano .env
+
+# STEP 6: Jalankan Bot dari awal di PM2 menggunakan Python venv
+pm2 start main.py --name "ai-trade-bot" --interpreter ./venv/bin/python3
+
+# STEP 7: Simpan list PM2 agar otomatis jalan saat server reboot
+pm2 save
+pm2 startup
 
 
-# --------------------------------------------------------------------
-# 2. CARA JALANKAN TEST SYSTEM (CEK KONEKSI & INDIKATOR SEBELUM RUN)
-# --------------------------------------------------------------------
+# ------------------------------------------------------------------
+# JIKA ADA PERUBAHAN BARU / UPDATE KODE DI SERVER LINUX / VPS:
+# ------------------------------------------------------------------
+# (Cukup copy-paste blok di bawah ini)
 
-python test_system.py
-
-
-# --------------------------------------------------------------------
-# 3. JIKA MENGGUNAKAN GIT (PULL UPDATE TERBARU DARI GITHUB)
-# --------------------------------------------------------------------
-
-# Ambil update kode terbaru dari repository:
 git pull origin main
-
-# Jalankan kembali bot:
-python main.py
-
-
-# --------------------------------------------------------------------
-# 4. CARA MENJALANKAN DI BACKGROUND / NON-STOP (LINUX / VPS DENGAN SCREEN)
-# --------------------------------------------------------------------
-
-# Buat session baru:
-screen -S tradebot
-
-# Jalankan bot:
-python main.py
-
-# (Tekan CTRL + A lalu tekan D untuk detach/keluar dari tampilan tanpa mematikan bot)
-
-# Untuk membuka kembali layarnya:
-screen -r tradebot
+source venv/bin/activate
+pip install -r requirements.txt
+pm2 restart ai-trade-bot
+pm2 logs ai-trade-bot --lines 50
 
 
-# --------------------------------------------------------------------
-# 5. CARA MENJALANKAN DENGAN PM2 (BACKGROUND PROCESS MANAGER)
-# --------------------------------------------------------------------
 
-# Install PM2 (jika belum ada):
-npm install -g pm2
+====================================================================
+OPSI B: UNTUK WINDOWS (POWERSHELL / CMD)
+====================================================================
 
-# Jalankan bot dengan restart otomatis jika crash:
-pm2 start main.py --name "trade-bot" --interpreter python
+# STEP 1: Masuk ke direktori folder bot
+cd "c:\Randy's\Bot\AI Daily Trade Bot"
 
-# Cek status bot:
+# STEP 2: Siapkan Virtual Environment Python (venv)
+python -m venv venv
+
+# STEP 3: Aktifkan Virtual Environment
+.\venv\Scripts\activate
+
+# STEP 4: Upgrade pip & Install requirements
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# STEP 5: Jalankan Bot dari awal di PM2 menggunakan Python venv
+pm2 start main.py --name "ai-trade-bot" --interpreter .\venv\Scripts\python.exe
+
+# STEP 6: Simpan state PM2
+pm2 save
+
+
+# ------------------------------------------------------------------
+# JIKA ADA PERUBAHAN BARU / UPDATE KODE DI WINDOWS:
+# ------------------------------------------------------------------
+# (Cukup copy-paste blok di bawah ini)
+
+git pull origin main
+.\venv\Scripts\activate
+pip install -r requirements.txt
+pm2 restart ai-trade-bot
+pm2 logs ai-trade-bot --lines 50
+
+
+
+====================================================================
+COMMAND PENTING PM2 LAINNYA (BISA DI-COPY KAPAN SAJA)
+====================================================================
+
+# Melihat status bot (apakah online/error/memory):
 pm2 status
 
-# Lihat log bot berjalan:
-pm2 logs trade-bot
+# Melihat log terminal bot secara live real-time:
+pm2 logs ai-trade-bot
 
-# Restart bot saat ada perubahan file:
-pm2 restart trade-bot
+# Restart bot:
+pm2 restart ai-trade-bot
+
+# Stop bot sementara:
+pm2 stop ai-trade-bot
+
+# Hapus bot dari list PM2 (jika ingin reset ulang dari awal):
+pm2 delete ai-trade-bot
+
