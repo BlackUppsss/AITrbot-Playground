@@ -328,7 +328,12 @@ class MarketScanner:
         def is_target_market(m: Dict[str, Any]) -> bool:
             sym = m.get("symbol", "").upper()
             base_sym = sym.split("/")[0].split("-")[0]
-            return sym in target_symbols or base_sym in target_symbols
+            if sym not in target_symbols and base_sym not in target_symbols:
+                return False
+            # Exclude forex markets proactively if today is Saturday or Sunday
+            if self.is_weekend_forex_blocked(sym):
+                return False
+            return True
 
         markets = [m for m in all_markets if is_target_market(m)]
         print(f"[Scanner] Active Elite High-Predictability Universe: {len(markets)} pairs: {[m.get('symbol') for m in markets]}")
