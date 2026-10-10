@@ -38,7 +38,7 @@ class Settings:
     # 1. Crypto: BTC, ETH (Top liquidity, 24/7 trading, respect technicals)
     # 2. Forex Majors: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD (High macro predictability, disabled on Saturday & Sunday)
     # 3. Macro Indices & Metals: SPY (S&P 500), US500 (US 500 Perp), QQQ (Nasdaq 100), XAU (Gold) (Cleanest trend continuation)
-    # 4. Mega-Cap Tech Stocks: NVDA, AAPL, META, TSLA (Institutional volume & clean support/resistance; AMZN, GOOGL, MSFT removed)
+    # 4. Mega-Cap Tech Stocks: NVDA, AAPL, MSFT, META, TSLA (Institutional volume & clean support/resistance; AMZN & GOOGL removed)
     # Weekend Allowed Symbols (Saturday & Sunday: ONLY Forex pairs blocked; Crypto, Indices, Gold & Stocks active)
     FOREX_SYMBOLS: list = [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"
@@ -50,8 +50,8 @@ class Settings:
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
         # Index & Gold (4 pairs)
         "SPY", "US500", "QQQ", "XAU",
-        # Mega-Cap Blue-Chip Stocks (4 pairs)
-        "NVDA", "AAPL", "META", "TSLA"
+        # Mega-Cap Blue-Chip Stocks (5 pairs)
+        "NVDA", "AAPL", "MSFT", "META", "TSLA"
     ]
     ALLOWED_SYMBOLS: list = HIGH_PREDICTABILITY_SYMBOLS
 
