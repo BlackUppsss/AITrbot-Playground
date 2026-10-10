@@ -39,6 +39,10 @@ class Settings:
     # 2. Forex Majors: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD (High macro predictability, disabled on Saturday & Sunday)
     # 3. Macro Indices & Metals: SPY (S&P 500), US500 (US 500 Perp), QQQ (Nasdaq 100), XAU (Gold) (Cleanest trend continuation)
     # 4. Mega-Cap Tech Stocks: NVDA, AAPL, MSFT, META, TSLA (Institutional volume & clean support/resistance; AMZN & GOOGL removed)
+    # Weekend Allowed Symbols (Saturday & Sunday: ONLY BTC and ETH allowed; all Forex, Indices, Gold & Stocks blocked)
+    WEEKEND_ALLOWED_SYMBOLS: list = [
+        "BTC", "ETH"
+    ]
     FOREX_SYMBOLS: list = [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"
     ]

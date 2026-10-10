@@ -42,17 +42,22 @@ class MarketScanner:
         self.ai_call_timestamps: list = []  # Tracks request timestamps in the last 60 seconds (for strict 30 RPM)
 
     @staticmethod
-    def is_weekend_forex_blocked(symbol: str) -> bool:
+    def is_weekend_blocked(symbol: str) -> bool:
         """
-        Block trading on currency / Forex pairs on Saturday (5) and Sunday (6) UTC.
+        On Saturday (5) and Sunday (6) UTC, ONLY allow BTC and ETH.
+        Block all other pairs (Forex, Indices, Gold, Stocks).
         """
-        sym_upper = symbol.upper().split("/")[0].split("-")[0]
-        forex_set = set(s.upper() for s in getattr(settings, "FOREX_SYMBOLS", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]))
-        if sym_upper in forex_set:
-            weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
-            if weekday in (5, 6):
-                return True
+        weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
+        if weekday in (5, 6):
+            sym_upper = symbol.upper().split("/")[0].split("-")[0]
+            weekend_allowed = set(s.upper() for s in getattr(settings, "WEEKEND_ALLOWED_SYMBOLS", ["BTC", "ETH"]))
+            return sym_upper not in weekend_allowed
         return False
+
+    @staticmethod
+    def is_weekend_forex_blocked(symbol: str) -> bool:
+        """Backward-compatible alias for is_weekend_blocked."""
+        return MarketScanner.is_weekend_blocked(symbol)
 
     async def handle_mark_price_tick(self, symbol: str, market_id: int, mark_price: float):
         """
@@ -103,8 +108,8 @@ class MarketScanner:
         symbol = market["symbol"]
         market_type = market["market_type"]
 
-        # Block Forex / Currency pairs on Saturday & Sunday
-        if self.is_weekend_forex_blocked(symbol):
+        # On Saturday & Sunday, ONLY allow BTC & ETH. Block all other pairs (Forex, Indices, Stocks, Gold)
+        if self.is_weekend_blocked(symbol):
             return None
 
         # Check cooldown (30 mins per pair unless it's a 1-shot price trigger re-eval)
@@ -330,8 +335,8 @@ class MarketScanner:
             base_sym = sym.split("/")[0].split("-")[0]
             if sym not in target_symbols and base_sym not in target_symbols:
                 return False
-            # Exclude forex markets proactively if today is Saturday or Sunday
-            if self.is_weekend_forex_blocked(sym):
+            # Exclude non-crypto markets proactively if today is Saturday or Sunday (Only BTC & ETH allowed)
+            if self.is_weekend_blocked(sym):
                 return False
             return True
 
