@@ -42,22 +42,22 @@ class MarketScanner:
         self.ai_call_timestamps: list = []  # Tracks request timestamps in the last 60 seconds (for strict 30 RPM)
 
     @staticmethod
-    def is_weekend_blocked(symbol: str) -> bool:
+    def is_weekend_forex_blocked(symbol: str) -> bool:
         """
-        On Saturday (5) and Sunday (6) UTC, ONLY allow BTC and ETH.
-        Block all other pairs (Forex, Indices, Gold, Stocks).
+        Block trading on currency / Forex pairs on Saturday (5) and Sunday (6) UTC.
+        Crypto (BTC, ETH), Indices (SPY, US500, QQQ), Gold (XAU), and Stocks remain active.
         """
         weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
         if weekday in (5, 6):
             sym_upper = symbol.upper().split("/")[0].split("-")[0]
-            weekend_allowed = set(s.upper() for s in getattr(settings, "WEEKEND_ALLOWED_SYMBOLS", ["BTC", "ETH"]))
-            return sym_upper not in weekend_allowed
+            forex_set = set(s.upper() for s in getattr(settings, "FOREX_SYMBOLS", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]))
+            return sym_upper in forex_set
         return False
 
     @staticmethod
-    def is_weekend_forex_blocked(symbol: str) -> bool:
-        """Backward-compatible alias for is_weekend_blocked."""
-        return MarketScanner.is_weekend_blocked(symbol)
+    def is_weekend_blocked(symbol: str) -> bool:
+        """Alias pointing to is_weekend_forex_blocked."""
+        return MarketScanner.is_weekend_forex_blocked(symbol)
 
     async def handle_mark_price_tick(self, symbol: str, market_id: int, mark_price: float):
         """
