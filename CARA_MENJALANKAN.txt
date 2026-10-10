@@ -1,0 +1,70 @@
+# ====================================================================
+# PANDUAN MENJALANKAN AI DAILY TRADE BOT (LIGHTER DEX)
+# ====================================================================
+
+# --------------------------------------------------------------------
+# 1. CARA MENJALANKAN BOT (LOKAL / VPS / SERVER)
+# --------------------------------------------------------------------
+
+# Masuk ke direktori folder bot:
+cd "c:\Randy's\Bot\AI Daily Trade Bot"
+
+# Pastikan dependencies sudah terinstal (cukup sekali):
+pip install -r requirements.txt
+
+# Jalankan Bot Utama:
+python main.py
+
+
+# --------------------------------------------------------------------
+# 2. CARA JALANKAN TEST SYSTEM (CEK KONEKSI & INDIKATOR SEBELUM RUN)
+# --------------------------------------------------------------------
+
+python test_system.py
+
+
+# --------------------------------------------------------------------
+# 3. JIKA MENGGUNAKAN GIT (PULL UPDATE TERBARU DARI GITHUB)
+# --------------------------------------------------------------------
+
+# Ambil update kode terbaru dari repository:
+git pull origin main
+
+# Jalankan kembali bot:
+python main.py
+
+
+# --------------------------------------------------------------------
+# 4. CARA MENJALANKAN DI BACKGROUND / NON-STOP (LINUX / VPS DENGAN SCREEN)
+# --------------------------------------------------------------------
+
+# Buat session baru:
+screen -S tradebot
+
+# Jalankan bot:
+python main.py
+
+# (Tekan CTRL + A lalu tekan D untuk detach/keluar dari tampilan tanpa mematikan bot)
+
+# Untuk membuka kembali layarnya:
+screen -r tradebot
+
+
+# --------------------------------------------------------------------
+# 5. CARA MENJALANKAN DENGAN PM2 (BACKGROUND PROCESS MANAGER)
+# --------------------------------------------------------------------
+
+# Install PM2 (jika belum ada):
+npm install -g pm2
+
+# Jalankan bot dengan restart otomatis jika crash:
+pm2 start main.py --name "trade-bot" --interpreter python
+
+# Cek status bot:
+pm2 status
+
+# Lihat log bot berjalan:
+pm2 logs trade-bot
+
+# Restart bot saat ada perubahan file:
+pm2 restart trade-bot
